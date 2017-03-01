@@ -99,20 +99,19 @@ end
 is_new_compute = false
 if node.workorder.rfcCi.ciClassName =~ /bom\..*\.Compute/
   is_new_compute = true
-else
-  include_recipe 'monitor::install_nagios'
-end
-
-Chef::Log.info("Is new compute: #{is_new_compute}")
-
-conf_dir = "#{dir_prefix}/etc/nagios"
-perf_dir = "#{dir_prefix}/opt/oneops/perf"
-if is_new_compute
-  puuid = (0..32).to_a.map{|a| rand(32).to_s(32)}.join
-  conf_dir = "/tmp/#{puuid}"
+  node.set['is_non_managed_via'] = true    
+  conf_dir = "/Users/mike/vol-mon/#{node['workorder']['box']['ciId']}"
   perf_dir = "#{conf_dir}/perf"
   FileUtils::mkdir_p "#{conf_dir}/conf.d"
+  
+else
+  include_recipe 'monitor::install_nagios'
+  conf_dir = "#{dir_prefix}/etc/nagios"
+  perf_dir = "#{dir_prefix}/opt/oneops/perf"
+  
 end
+
+Chef::Log.debug("is_new_compute: #{is_new_compute}")
 
 node.set['nagios_conf_dir'] = conf_dir
 node.set['perf_conf_dir'] = perf_dir
@@ -296,11 +295,26 @@ ruby_block 'setup nagios' do
       template += get_additional_attributes(monitor,'command')
       template += '}\n\n'
 
-      template.gsub!( /:::(.*?):::/ ) { '#{'+$1+'}' }
+      
+      template.gsub!( /:::(.*?):::/ ) { '#{'+$1+'}' }      
       new_block = eval( '"' + template + '"' )
-      Chef::Log.info('adding: '+new_block )
+
+      puts "new_block: #{new_block}"
+      
+      if new_block.include?(':::')
+        # sub node variables
+        new_block.gsub!( /:::(.*?):::/ ) { '#{'+$1+'}' }
+        final_block = eval( '"' + new_block + '"' )
+      else
+        final_block = new_block
+      end
+
+      puts "final_block: #{final_block}"
+      
+            
+      Chef::Log.info('adding: '+final_block )
       command_file = $conf_d + '/command_' + command_name + '.cfg'
-      ::File.open(command_file, 'w') {|f| f.write(new_block) }
+      ::File.open(command_file, 'w') {|f| f.write(final_block) }
       return 1
     end
 
@@ -336,50 +350,7 @@ ruby_block 'setup nagios' do
       changes += process_monitor(monitor)
     end
 
-    if is_new_compute
-
-      # sync and restart
-      # node rsync and ssh set from compute::base
-      cmd = node.rsync_cmd.gsub('SOURCE',conf_dir).gsub('DEST','/tmp').gsub('IP',node.ip)
-      result = shell_out(cmd)
-      Chef::Log.info("#{cmd} returned: #{result.stdout}")
-      result.error!
-
-      dirs = ["#{dir_prefix}/var/run/nagios3","#{dir_prefix}/opt/nagios/libexec"]
-      dirs += ["#{dir_prefix}/var/log/nagios3","#{dir_prefix}/opt/oneops/perf"]
-      # not going to chown for windows
-      if ostype =~ /windows/
-        cmd = node.ssh_cmd.gsub('IP',node.ip) + '"' + 'sudo mkdir -p '+dirs.join(' ')+';' +
-         'sudo chown -R oneops:Administrators /var/run/nagios3 /var/log/nagios3 /opt/oneops/perf' + '"'
-	  else
-        cmd = node.ssh_cmd.gsub('IP',node.ip) + '"' + 'sudo mkdir -p '+dirs.join(' ')+';' +
-         'sudo chown -R nagios:nagios /var/run/nagios3 /var/log/nagios3 /opt/oneops/perf' + '"'
-      end
-      result = shell_out(cmd)
-      Chef::Log.info("#{cmd} returned: #{result.stdout}")
-      result.error!
-
-      # copy default plugins
-      nagios_plugins = node.circuit_dir+'/shared/cookbooks/monitor/files/default/*'
-      cmd = node.rsync_cmd.gsub('SOURCE',nagios_plugins).gsub('DEST','~/nagios_libexec/').gsub('IP',node.ip)
-      result = shell_out(cmd)
-      Chef::Log.info("#{cmd} returned: #{result.stdout}")
-      result.error!
-
-      cmd = node.ssh_cmd.gsub('IP',node.ip) + '"' + "sudo mv ~/nagios_libexec/* #{dir_prefix}/opt/nagios/libexec/" + '"'
-      result = shell_out(cmd)
-      Chef::Log.info("#{cmd} returned: #{result.stdout}")
-      result.error!
-
-      cmd = node.ssh_cmd.gsub('IP',node.ip) + '"' + "sudo cp -r #{conf_dir}/* #{dir_prefix}/etc/nagios/; sudo cp -r #{conf_dir}/perf #{dir_prefix}/opt/oneops/; " +
-          "sudo chmod +x #{dir_prefix}/opt/nagios/libexec/* " + '"'
-      result = shell_out(cmd)
-      Chef::Log.info("#{cmd} returned: #{result.stdout}")
-      result.error!
-
-      `rm -fr #{conf_dir}`
-
-    else
+    unless is_new_compute
       # standard way
       # for flume agent use in connecting to collectors
       mgmt_domain = node.mgmt_domain
@@ -417,7 +388,7 @@ end
 
 
 if is_new_compute
-  include_recipe 'compute::ssh_key_file_rm'
+  include_recipe 'monitor::setup_monitor_container'
 else
   if ostype =~ /windows/
     perf_dir = '/opt/oneops/perf'

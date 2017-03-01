@@ -1097,7 +1097,7 @@ use_timezone=UTC
 #
 # ubuntu 12.04 nagios 3.2.3 needed to have this file specified even tho enable_embedded_perl=0
 #
-<% if node.platform == "ubuntu" %>
+<% if node.platform == "ubuntu" || node.has_key?('is_non_managed_via') %>
 p1_file=/usr/lib/nagios3/p1.pl
 <% else %>
 #p1_file=/usr/lib/nagios3/p1.pl
